@@ -9,6 +9,41 @@
   background: transparent !important;
 }
 
+[data-testid^="AppTabBar_"] [aria-live],
+.x-count-masker-badge {
+  display: none !important;
+}
+
+[data-testid="AppTabBar_Notifications_Link"] {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
+[data-testid="AppTabBar_Notifications_Link"] > div {
+  position: relative !important;
+}
+
+[data-testid="AppTabBar_Notifications_Link"] > div > * {
+  visibility: hidden !important;
+}
+
+[data-testid="AppTabBar_Notifications_Link"] > div::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  background: rgb(113, 118, 123);
+}
+
+.x-count-masker-own-post [data-testid="reply"],
+.x-count-masker-own-post [data-testid="retweet"],
+.x-count-masker-own-post [data-testid="unretweet"],
+.x-count-masker-own-post [data-testid="like"],
+.x-count-masker-own-post [data-testid="unlike"] {
+  cursor: not-allowed !important;
+  opacity: 0.35 !important;
+}
+
 .x-count-masker-follower-count:not(.x-count-masker-follower-count--revealed) {
   color: transparent !important;
   text-shadow: none !important;

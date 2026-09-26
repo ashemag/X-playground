@@ -177,6 +177,8 @@
   };
 
   const unmaskCommentCounts = (actionElement) => {
+    if (actionElement.closest(".x-count-masker-own-post")) return;
+
     const candidates = actionElement.querySelectorAll(
       METRIC_TEXT_SELECTOR
     );
@@ -375,7 +377,116 @@
     }
   };
 
+  const NAV_TAB_SELECTOR = '[data-testid^="AppTabBar_"]';
+  const TITLE_COUNT_PATTERN = /^\s*\(\s*\d+\+?\s*\)\s*/;
+  const NAV_LABEL_COUNT_PATTERN =
+    /\s*\(?\s*\d+\+?\s+(?:new|unread)\s+[^)]*\)?|\s*\(\s*\d+\+?\s*\)/gi;
+  const FAVICON_PIP_PATTERN = /twitter-pip(\.\d+)?\.ico/;
+
+  const maskNavBadges = (root) => {
+    for (const tab of root.querySelectorAll(NAV_TAB_SELECTOR)) {
+      for (const badge of tab.querySelectorAll("[aria-live]")) {
+        badge.classList.add("x-count-masker-badge");
+        badge.setAttribute("aria-hidden", "true");
+      }
+
+      const label = tab.getAttribute("aria-label");
+      if (!label) continue;
+
+      const sanitized = label.replace(NAV_LABEL_COUNT_PATTERN, "").trim();
+      if (sanitized && sanitized !== label) {
+        tab.setAttribute("aria-label", sanitized);
+      }
+    }
+  };
+
+  const maskTitleCount = () => {
+    const title = document.title;
+    if (TITLE_COUNT_PATTERN.test(title)) {
+      document.title = title.replace(TITLE_COUNT_PATTERN, "");
+    }
+  };
+
+  const maskFaviconBadge = () => {
+    for (const icon of document.querySelectorAll('link[rel~="icon"]')) {
+      const href = icon.getAttribute("href") || "";
+      if (FAVICON_PIP_PATTERN.test(href)) {
+        icon.setAttribute(
+          "href",
+          href.replace(FAVICON_PIP_PATTERN, "twitter$1.ico")
+        );
+      }
+    }
+  };
+
+  const NOTIFICATIONS_LINK_SELECTOR =
+    '[data-testid="AppTabBar_Notifications_Link"], a[href="/notifications"], a[href^="/notifications/"]';
+  const NOTIFICATIONS_PATH_PATTERN = /^\/notifications(?:\/|$)/;
+
+  const blockNotificationsPage = () => {
+    if (NOTIFICATIONS_PATH_PATTERN.test(location.pathname)) {
+      location.replace("/home");
+    }
+  };
+
+  const blockNotificationsLinks = (root) => {
+    for (const link of root.querySelectorAll(NOTIFICATIONS_LINK_SELECTOR)) {
+      link.setAttribute("tabindex", "-1");
+      link.setAttribute("aria-disabled", "true");
+    }
+  };
+
+  const OWN_HANDLE = "ashebytes";
+  const OWN_POST_CLASS = "x-count-masker-own-post";
+  const LOCKED_ACTION_TEST_IDS = [
+    "reply",
+    "retweet",
+    "unretweet",
+    "like",
+    "unlike"
+  ];
+  const LOCKED_ACTION_SELECTOR = LOCKED_ACTION_TEST_IDS
+    .map((testId) => `.${OWN_POST_CLASS} [data-testid="${testId}"]`)
+    .join(",");
+  const LOCKED_SHORTCUT_KEYS = new Set(["l", "r", "t"]);
+
+  const isOwnPost = (article) => {
+    const authorName = article.querySelector('[data-testid="User-Name"]');
+    if (!authorName) return false;
+
+    for (const link of authorName.querySelectorAll("a[href]")) {
+      const handle = (link.getAttribute("href") || "").replace(/^\//, "");
+      if (handle.toLowerCase() === OWN_HANDLE) return true;
+    }
+
+    return false;
+  };
+
+  const lockOwnPosts = (root) => {
+    for (const article of root.querySelectorAll('article[data-testid="tweet"]')) {
+      if (!isOwnPost(article)) {
+        article.classList.remove(OWN_POST_CLASS);
+        continue;
+      }
+
+      article.classList.add(OWN_POST_CLASS);
+    }
+
+    for (const action of root.querySelectorAll(LOCKED_ACTION_SELECTOR)) {
+      action.setAttribute("tabindex", "-1");
+      action.setAttribute("aria-disabled", "true");
+      sanitizeActionLabel(action);
+      maskActionCounts(action);
+    }
+  };
+
   const scan = (root = document) => {
+    blockNotificationsPage();
+    blockNotificationsLinks(root);
+    maskNavBadges(root);
+    maskTitleCount();
+    maskFaviconBadge();
+
     for (const actionElement of root.querySelectorAll(ACTION_SELECTOR)) {
       maskActionCounts(actionElement);
     }
@@ -388,6 +499,7 @@
     wrapMetricCountText(scanRoot, MASKED_METRIC_TEXT_PATTERN);
     maskLabelledMetricCounts(scanRoot);
     maskViewMetricCounts(scanRoot);
+    lockOwnPosts(scanRoot);
     unmaskAllCommentCounts(scanRoot);
 
     for (const element of root.querySelectorAll("[aria-label]")) {
@@ -422,6 +534,51 @@
     true
   );
 
+  for (const eventName of ["click", "auxclick", "mousedown", "keydown"]) {
+    document.addEventListener(
+      eventName,
+      (event) => {
+        if (!event.target.closest?.(NOTIFICATIONS_LINK_SELECTOR)) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+  }
+
+  for (const eventName of ["click", "auxclick", "mousedown", "keydown"]) {
+    document.addEventListener(
+      eventName,
+      (event) => {
+        if (!event.target.closest?.(LOCKED_ACTION_SELECTOR)) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+  }
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.metaKey || event.ctrlKey || event.altKey) return;
+      if (!LOCKED_SHORTCUT_KEYS.has(event.key.toLowerCase())) return;
+
+      const active = document.activeElement;
+      if (!active || active.isContentEditable) return;
+      if (active.matches("input, textarea, select")) return;
+      if (!active.closest(`.${OWN_POST_CLASS}`)) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true
+  );
+
+  window.addEventListener("popstate", blockNotificationsPage);
+
   document.addEventListener(
     "dblclick",
     (event) => {
@@ -444,6 +601,9 @@
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, {
     childList: true,
-    subtree: true
+    subtree: true,
+    characterData: true,
+    attributes: true,
+    attributeFilter: ["href", "aria-label"]
   });
 })();
