@@ -20,7 +20,7 @@ It also removes notification signals:
 - strips unread counts from the tab title and swaps out the unread favicon
 - grays out the Notifications tab, blocks clicking it, and redirects `/notifications` to Home
 
-On posts authored by `@ashebytes` (set via `OWN_HANDLE` in `src/content.js`), the reply, repost, and like buttons are locked (clicks and the `r`/`t`/`l` shortcuts are blocked) and the reply count is hidden.
+On posts authored by `@ashebytes` (set via `OWN_HANDLE` in `src/content.js`), the reply and like buttons are locked (clicks and the `r`/`l` shortcuts are blocked) and the reply count is hidden.
 
 The extension runs as a content script on `x.com` and `twitter.com`. It scans the current page and keeps watching for new posts loaded while you scroll.
 

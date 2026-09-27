@@ -440,15 +440,13 @@
   const OWN_POST_CLASS = "x-count-masker-own-post";
   const LOCKED_ACTION_TEST_IDS = [
     "reply",
-    "retweet",
-    "unretweet",
     "like",
     "unlike"
   ];
   const LOCKED_ACTION_SELECTOR = LOCKED_ACTION_TEST_IDS
     .map((testId) => `.${OWN_POST_CLASS} [data-testid="${testId}"]`)
     .join(",");
-  const LOCKED_SHORTCUT_KEYS = new Set(["l", "r", "t"]);
+  const LOCKED_SHORTCUT_KEYS = new Set(["l", "r"]);
 
   const isOwnPost = (article) => {
     const authorName = article.querySelector('[data-testid="User-Name"]');

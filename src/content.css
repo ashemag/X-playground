@@ -4,6 +4,14 @@
   user-select: none !important;
 }
 
+[data-testid="retweet"] span,
+[data-testid="unretweet"] span,
+a[href$="/retweets"] [data-testid="app-text-transition-container"] {
+  color: transparent !important;
+  text-shadow: none !important;
+  user-select: none !important;
+}
+
 .x-count-masker-count::selection {
   color: transparent !important;
   background: transparent !important;
@@ -36,8 +44,6 @@
 }
 
 .x-count-masker-own-post [data-testid="reply"],
-.x-count-masker-own-post [data-testid="retweet"],
-.x-count-masker-own-post [data-testid="unretweet"],
 .x-count-masker-own-post [data-testid="like"],
 .x-count-masker-own-post [data-testid="unlike"] {
   cursor: not-allowed !important;
