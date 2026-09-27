@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "X Playground",
   "version": "0.1.0",
-  "description": "Masks visible engagement counts on X posts while keeping actions clickable.",
+  "description": "Blocks notifications, hides engagement and follower counts, and locks replies and likes on your own X posts.",
   "content_scripts": [
     {
       "matches": [
