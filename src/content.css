@@ -4,6 +4,7 @@
   user-select: none !important;
 }
 
+[data-testid="reply"] span,
 [data-testid="retweet"] span,
 [data-testid="unretweet"] span,
 a[href$="/retweets"] [data-testid="app-text-transition-container"] {

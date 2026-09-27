@@ -1,5 +1,6 @@
 (() => {
   const ACTION_TEST_IDS = [
+    "reply",
     "retweet",
     "unretweet",
     "like",
@@ -11,6 +12,8 @@
   ];
 
   const ACTION_LABEL_WORDS = [
+    "reply",
+    "replies",
     "repost",
     "reposts",
     "quote",
@@ -45,16 +48,11 @@
     String.raw`^\s*${MASKED_METRIC_LABEL_WORDS}\s*$`,
     "i"
   );
-  const COMMENT_LABEL_PATTERN = new RegExp(
-    String.raw`^\s*(?:${COUNT_VALUE_PATTERN}\s+)?(Repl(?:y|ies)|Comments?)\s*$`,
-    "i"
-  );
   const VIEW_METRIC_LABEL_PATTERN = /\b(Views?|Impressions?)\b/i;
   const ACTION_SELECTOR = ACTION_TEST_IDS
     .map((testId) => `[data-testid="${testId}"]`)
     .join(",");
   const VIEW_ACTION_SELECTOR = '[data-testid="view"], [data-testid="analytics"]';
-  const COMMENT_ACTION_SELECTOR = '[data-testid="reply"]';
   const FOLLOWER_LINK_SELECTOR =
     'a[href*="/followers"], a[href*="/verified_followers"]';
   const METRIC_TEXT_SELECTOR =
@@ -69,25 +67,6 @@
   };
 
   const isCountText = (text) => COUNT_TEXT_PATTERN.test(text);
-
-  const isCommentElement = (element) => {
-    if (element.matches(COMMENT_ACTION_SELECTOR)) return true;
-    if (element.querySelector(ACTION_SELECTOR)) return false;
-
-    const label = element.getAttribute("aria-label") || "";
-    return COMMENT_LABEL_PATTERN.test(label);
-  };
-
-  const isInsideCommentControl = (element) => {
-    let current = element;
-
-    for (let depth = 0; current && depth < 6; depth++) {
-      if (isCommentElement(current)) return true;
-      current = current.parentElement;
-    }
-
-    return false;
-  };
 
   const hasCountText = (element) => {
     for (const candidate of element.querySelectorAll(METRIC_TEXT_SELECTOR)) {
@@ -108,13 +87,6 @@
 
     element.classList.add("x-count-masker-follower-count");
     element.title = "Double-click to show follower count";
-  };
-
-  const unmaskVisibleCountNode = (element) => {
-    element.classList.remove("x-count-masker-count");
-    if (element.getAttribute("aria-hidden") === "true") {
-      element.removeAttribute("aria-hidden");
-    }
   };
 
   const sanitizeActionLabel = (element) => {
@@ -154,8 +126,6 @@
 
     const candidates = container.querySelectorAll(METRIC_TEXT_SELECTOR);
     for (const candidate of candidates) {
-      if (isInsideCommentControl(candidate)) continue;
-
       const text = candidate.textContent || "";
       if (isCountText(text)) {
         maskVisibleCountNode(candidate);
@@ -173,32 +143,6 @@
       }
 
       container = container.parentElement;
-    }
-  };
-
-  const unmaskCommentCounts = (actionElement) => {
-    if (actionElement.closest(".x-count-masker-own-post")) return;
-
-    const candidates = actionElement.querySelectorAll(
-      METRIC_TEXT_SELECTOR
-    );
-
-    for (const candidate of candidates) {
-      if (candidate.classList.contains("x-count-masker-count")) {
-        unmaskVisibleCountNode(candidate);
-      }
-    }
-  };
-
-  const unmaskAllCommentCounts = (root) => {
-    for (const commentAction of root.querySelectorAll(COMMENT_ACTION_SELECTOR)) {
-      unmaskCommentCounts(commentAction);
-    }
-
-    for (const labelledElement of root.querySelectorAll("[aria-label]")) {
-      if (isCommentElement(labelledElement)) {
-        unmaskCommentCounts(labelledElement);
-      }
     }
   };
 
@@ -341,7 +285,7 @@
           .find((candidate) => isCountText(candidate.textContent || ""));
         const countElement = precedingCount || followingCount;
 
-        if (countElement && !isInsideCommentControl(countElement)) {
+        if (countElement) {
           maskVisibleCountNode(countElement);
           return;
         }
@@ -498,7 +442,6 @@
     maskLabelledMetricCounts(scanRoot);
     maskViewMetricCounts(scanRoot);
     lockOwnPosts(scanRoot);
-    unmaskAllCommentCounts(scanRoot);
 
     for (const element of root.querySelectorAll("[aria-label]")) {
       if (hasActionLabel(element)) {

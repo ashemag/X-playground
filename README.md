@@ -12,15 +12,13 @@ It masks counts for common X post actions:
 - impressions
 - views
 
-Reply/comment counts stay visible, except on your own posts.
-
 It also removes notification signals:
 
 - hides unread badges on sidebar and bottom-bar tabs
 - strips unread counts from the tab title and swaps out the unread favicon
 - grays out the Notifications tab, blocks clicking it, and redirects `/notifications` to Home
 
-On posts authored by `@ashebytes` (set via `OWN_HANDLE` in `src/content.js`), the reply and like buttons are locked (clicks and the `r`/`l` shortcuts are blocked) and the reply count is hidden.
+On posts authored by `@ashebytes` (set via `OWN_HANDLE` in `src/content.js`), the reply and like buttons are also locked (clicks and the `r`/`l` shortcuts are blocked).
 
 The extension runs as a content script on `x.com` and `twitter.com`. It scans the current page and keeps watching for new posts loaded while you scroll.
 
