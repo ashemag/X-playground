@@ -1,6 +1,6 @@
 {
   "manifest_version": 3,
-  "name": "X Count Masker",
+  "name": "X Playground",
   "version": "0.1.0",
   "description": "Masks visible engagement counts on X posts while keeping actions clickable.",
   "content_scripts": [

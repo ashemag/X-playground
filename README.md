@@ -1,4 +1,4 @@
-# X Count Masker
+# X Playground
 
 A small Manifest V3 Chrome extension that hides visible engagement counts on X posts while leaving the underlying buttons clickable. It also masks follower counts on profile links until you double-click the hidden number.
 
