@@ -23,12 +23,24 @@ A post counts as yours when its author handle matches `OWN_HANDLE` in `src/conte
 
 - The reply and like buttons are dimmed and can't be clicked. That includes un-liking.
 - The `r` (reply) and `l` (like) keyboard shortcuts are blocked when a post of yours is focused.
-- Clicking the post body, timestamp, photos, or "Show more" doesn't open the post's page, so you can't reach its replies that way. `Enter` and `o` are blocked too. If you land on the post's page anyway (a link or a typed URL), everything below your post is hidden except your own replies, and the same goes for the reply panel in the photo viewer. Your name, avatar, links in your text, link previews, videos, and quoted posts still work.
+- Clicking the post opens it as usual, with its replies filtered (see below).
 - Repost, bookmark, share, and view analytics still work.
 
 Your profile page is mostly your own posts, so most reply buttons there will be locked.
 
 Other people's posts are not locked. You can reply to, like, and repost them as usual.
+
+### Hides negative replies
+
+Replies on your posts are sent to GPT 5.6 Sol (`gpt-5.6-sol`), including emoji and attached images. Only supportive, kind, neutral, and genuinely curious replies stay visible. Everything hateful, mean, rude, negative, or critical is hidden: hate speech, insults, mockery, sarcasm, condescension, backhanded compliments, mean emoji like 🤡, and put-down memes. Polite criticism, disagreement, corrections, and unsolicited advice are hidden too. When a reply could reasonably read as a dig or a criticism, it's hidden. Any question or comment about your camera, lens, phone, gear, or setup is always hidden. Obvious wordings like "what camera do you use" are caught by a rule in `src/content.js` (`GEAR_QUESTION_PATTERN`) before they reach the model, and GPT 5.6 Sol catches the other variants. That covers:
+
+- the replies under your post when you open it, including the photo viewer's reply panel
+- replies to you that show up in the timeline
+- your post's activity pages: quotes are judged like replies, and on the Reposts and Likes lists, accounts with a hateful or mocking name or bio, or one aimed at you, are hidden
+
+If a review can't run, a small banner at the bottom of the page says why. For example, after you reload the extension, it asks you to refresh the tab.
+
+Your own replies stay visible. A reply stays hidden until the review comes back, so a mean one doesn't flash on screen. If a review fails, the reply stays hidden and is retried. If OpenAI can't load a reply's image, an image-only reply stays hidden. Verdicts are cached in the extension, keyed by the reply and its content. The OpenAI key lives in `src/secrets.js`, which is gitignored.
 
 ### Hides engagement counts
 
@@ -49,23 +61,22 @@ Follower counts on profiles are hidden. Double-click a hidden count to show it, 
 
 ## What it doesn't do
 
-This extension hides signals in the page. It doesn't filter out content, so it won't stop hate speech from being posted or delivered. In particular:
+This extension hides signals in the page. It doesn't stop anyone from posting. In particular:
 
-- **Replies are still there.** If you open one of your posts, the replies under it are still visible; only their count is hidden.
+- **Only replies the page has rendered are reviewed.** A reply that never loads into the desktop site is untouched. Videos are judged by their thumbnail only.
 - **Messages are not blocked.** The Messages tab and DMs work as normal; only the unread badge on the tab is hidden.
-- **Mentions can still surface elsewhere,** for example in search or in replies that show up in your timeline.
+- **Mentions can still surface elsewhere,** for example in search, when the reply isn't shown as a comment on your post.
 - **It only works in Chrome on desktop.** The X mobile apps and other browsers are unaffected.
-
-To filter at the source, pair it with X's own settings: limit who can reply to your posts, mute words and accounts, and restrict who can message you.
 
 ## Setup
 
 1. In `src/content.js`, set `OWN_HANDLE` to your X handle without the `@`.
-2. Open `chrome://extensions`.
-3. Enable `Developer mode`.
-4. Click `Load unpacked`.
-5. Select this repo's folder.
-6. Visit or refresh X.
+2. `src/secrets.js` should already be present locally (gitignored). It holds the OpenAI key used to review replies. If it's missing, recreate it from `OPENAI_API_KEY` in the `ashe_ai` `.env` as `self.OPENAI_API_KEY = "...";`.
+3. Open `chrome://extensions`.
+4. Enable `Developer mode`.
+5. Click `Load unpacked`.
+6. Select this repo's folder. Accept the `api.openai.com` permission when Chrome asks.
+7. Visit or refresh X.
 
 After editing any file, click the reload icon on the extension in `chrome://extensions` and refresh X.
 
@@ -74,12 +85,12 @@ After editing any file, click the reload icon on the extension in `chrome://exte
 The defaults are the strictest setting. There's no options page yet, so each setting is changed in the code:
 
 - **Unlock replying to or liking your own posts**: remove entries from `LOCKED_ACTION_TEST_IDS` and `LOCKED_SHORTCUT_KEYS` in `src/content.js`, and remove the matching `.x-count-masker-own-post [data-testid="..."]` selectors in `src/content.css` so the buttons are no longer dimmed.
-- **Allow opening your own posts**: delete the `click`/`auxclick` listener that calls `opensOwnPost` and the `keydown` listener for `Enter`/`o` in `src/content.js`.
 - **Bring back notifications**: in `src/content.js`, delete the `blockNotificationsPage` and `blockNotificationsLinks` calls in `scan()`, the `popstate` listener, and the click listener that checks `NOTIFICATIONS_LINK_SELECTOR`. Then delete the `AppTabBar_Notifications_Link` rules in `src/content.css`. To keep unread badges, also delete the `maskNavBadges`, `maskTitleCount`, and `maskFaviconBadge` calls in `scan()`.
 - **Show a specific count again** (for example, likes): remove its `data-testid` entries (such as `"like"` and `"unlike"`) from `ACTION_TEST_IDS` in `src/content.js`, and remove its word (such as `Likes?`) from `MASKED_METRIC_LABEL_WORDS`, which covers the counts on a post's own page. Reply and repost counts are also hidden by a rule near the top of `src/content.css`; delete the matching lines there too.
+- **Show every reply again, including negative ones**: delete the `moderateOwnPostComments()` call in `scan()` in `src/content.js`.
 - **Show follower counts by default**: delete the `maskFollowerCount` loop in `scan()` in `src/content.js`.
 
 ## Notes
 
 - The extension runs as a content script on `x.com` and `twitter.com`, and keeps watching for new posts loaded while you scroll.
-- It does not block network requests or change anything on your account. Counts are hidden in the page with CSS, and disabling the extension brings everything back.
+- It does not block network requests or change anything on your account. Counts are hidden in the page with CSS. Reply text is sent to OpenAI only to decide whether to hide it. Disabling the extension brings everything back.

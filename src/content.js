@@ -424,7 +424,16 @@
 
   const HIDDEN_REPLY_CLASS = "x-count-masker-hidden-reply";
   const OWN_STATUS_PATH_PATTERN = new RegExp(
-    String.raw`^/${OWN_HANDLE}/status/(\d+)(/photo/\d+|/video/\d+)?/?$`,
+    String.raw`^/${OWN_HANDLE}/status/(\d+)(/photo/\d+|/video/\d+)?(/retweets(?:/with_comments)?|/quotes|/likes)?/?$`,
+    "i"
+  );
+  const GEAR_QUESTION_PATTERN = new RegExp(
+    [
+      String.raw`\b(?:camera|cam|cams|lens|lenses|dslr|mirrorless|gear|rig)\b`,
+      String.raw`\b(?:shot|shoot|shooting|film|filmed|filming|record|recorded|recording)\s+(?:this\s+|that\s+|it\s+)?(?:on|with)\b`,
+      String.raw`\bwhat\s+(?:phone|device)\b`,
+      String.raw`\b(?:canon|nikon|sony\s+a\d|fuji|fujifilm|leica|gopro|insta360|lumix|blackmagic|red\s+komodo)\b`
+    ].join("|"),
     "i"
   );
 
@@ -438,44 +447,421 @@
     return false;
   };
 
-  const hideRepliesOnOwnPostPage = () => {
-    const match = location.pathname.match(OWN_STATUS_PATH_PATTERN);
-    const hiddenCells = new Set();
+  const VERDICT_STORAGE_KEY = "replyVerdicts.v3";
+  const COMMENT_SCOPES = '[data-testid="primaryColumn"], [role="dialog"]';
+  const verdicts = new Map();
+  const inflight = new Set();
+  const classifyQueue = new Map();
+  let cacheReady = false;
+  let flushTimer = 0;
+  let retryAfter = 0;
 
-    if (match) {
-      const statusId = match[1];
-      const isMediaView = Boolean(match[2]);
-      const scope = isMediaView
-        ? document.querySelector('[role="dialog"]')
-        : document.querySelector('[data-testid="primaryColumn"]');
-      const cells = scope
-        ? Array.from(scope.querySelectorAll('[data-testid="cellInnerDiv"]'))
-        : [];
-      const focalIndex = isMediaView
-        ? -1
-        : cells.findIndex((cell) => {
+  const hashText = (text) => {
+    let hash = 5381;
+    for (let index = 0; index < text.length; index++) {
+      hash = ((hash * 33) ^ text.charCodeAt(index)) >>> 0;
+    }
+    return hash.toString(16);
+  };
+
+  const handleFromHref = (href) => {
+    if (!href) return "";
+    const path = href.replace(/^https?:\/\/(?:x|twitter)\.com/i, "");
+    const handle = path.replace(/^\//, "").split(/[/?#]/)[0];
+    if (!handle || handle === "i" || handle === "home" || handle === "search") {
+      return "";
+    }
+    return handle.toLowerCase();
+  };
+
+  const tweetIdFromArticle = (article) => {
+    const timeLink = article.querySelector('a[href*="/status/"] time')?.closest("a");
+    const href = timeLink?.getAttribute("href") || "";
+    const match = href.match(/\/status\/(\d+)/);
+    return match ? match[1] : null;
+  };
+
+  const MAX_IMAGES_PER_REPLY = 4;
+
+  const cleanText = (text) => (text || "").replace(/\s+/g, " ").trim();
+
+  const textWithEmoji = (node) => {
+    let text = "";
+    const walker = document.createTreeWalker(
+      node,
+      NodeFilter.SHOW_TEXT | NodeFilter.SHOW_ELEMENT
+    );
+    let current = walker.nextNode();
+
+    while (current) {
+      if (current.nodeType === Node.TEXT_NODE) {
+        text += current.nodeValue;
+      } else if (current.tagName === "IMG") {
+        text += current.getAttribute("alt") || "";
+      } else if (current.tagName === "BR") {
+        text += "\n";
+      }
+      current = walker.nextNode();
+    }
+
+    return text;
+  };
+
+  const isInQuotedPost = (element, article) => {
+    const quoted = element.closest('[role="link"]');
+    return Boolean(quoted && article.contains(quoted) && quoted !== article);
+  };
+
+  const tweetTexts = (article) => {
+    const own = [];
+    const quoted = [];
+
+    for (const node of article.querySelectorAll('[data-testid="tweetText"]')) {
+      const text = cleanText(textWithEmoji(node));
+      if (!text) continue;
+      (isInQuotedPost(node, article) ? quoted : own).push(text);
+    }
+
+    return { own, quoted };
+  };
+
+  const tweetBody = (article) => {
+    const { own, quoted } = tweetTexts(article);
+
+    const alts = Array.from(
+      article.querySelectorAll('[data-testid="tweetPhoto"] img[alt]')
+    )
+      .map((img) => cleanText(img.getAttribute("alt")))
+      .filter((alt) => alt && alt !== "Image");
+
+    const parts = [...own];
+    if (alts.length) parts.push(`[image description] ${alts.join(" | ")}`);
+    if (quoted.length) parts.push(`[quoted post] ${quoted.join(" | ")}`);
+
+    return parts.join("\n").slice(0, 1500);
+  };
+
+  const imageUrl = (src) => {
+    if (!src || !/^https:\/\/pbs\.twimg\.com\//.test(src)) return "";
+    try {
+      const url = new URL(src);
+      if (url.searchParams.has("name")) url.searchParams.set("name", "small");
+      return url.toString();
+    } catch {
+      return "";
+    }
+  };
+
+  const tweetImages = (article) => {
+    const urls = [];
+    const push = (src) => {
+      const url = imageUrl(src);
+      if (url && !urls.includes(url)) urls.push(url);
+    };
+
+    for (const img of article.querySelectorAll('[data-testid="tweetPhoto"] img')) {
+      push(img.getAttribute("src"));
+    }
+    for (const video of article.querySelectorAll('[data-testid="videoPlayer"] video[poster]')) {
+      push(video.getAttribute("poster"));
+    }
+    for (const img of article.querySelectorAll('[data-testid="card.wrapper"] img')) {
+      push(img.getAttribute("src"));
+    }
+
+    return urls.slice(0, MAX_IMAGES_PER_REPLY);
+  };
+
+  const hasUnloadedMedia = (article) =>
+    Boolean(
+      article.querySelector(
+        '[data-testid="tweetPhoto"], [data-testid="videoPlayer"]'
+      )
+    ) && tweetImages(article).length === 0;
+
+  const authorHandle = (article) => {
+    const authorName = article.querySelector('[data-testid="User-Name"]');
+    if (!authorName) return "";
+
+    for (const link of authorName.querySelectorAll("a[href]")) {
+      const handle = handleFromHref(link.getAttribute("href"));
+      if (handle) return handle;
+    }
+
+    return "";
+  };
+
+  const isAd = (article) =>
+    Array.from(article.querySelectorAll("span")).some((span) => {
+      if (span.closest(USER_TEXT_SELECTOR)) return false;
+      return (span.textContent || "").trim() === "Ad";
+    });
+
+  const isReplyingToOwnHandle = (article) => {
+    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
+    let node = walker.nextNode();
+
+    while (node) {
+      if (/^\s*Replying to\s*$/i.test(node.nodeValue || "")) {
+        let container = node.parentElement;
+        for (let depth = 0; container && container !== article && depth < 5; depth++) {
+          const label = (container.textContent || "").trim();
+          if (/^Replying to\b/i.test(label) && label.length < 240) {
+            for (const link of container.querySelectorAll("a[href]")) {
+              if (handleFromHref(link.getAttribute("href")) === OWN_HANDLE) return true;
+            }
+          }
+          container = container.parentElement;
+        }
+      }
+      node = walker.nextNode();
+    }
+
+    return false;
+  };
+
+  const commentScopes = () =>
+    Array.from(document.querySelectorAll(COMMENT_SCOPES));
+
+  const collectOwnPostComments = () => {
+    const comments = [];
+    const seen = new Set();
+    const page = location.pathname.match(OWN_STATUS_PATH_PATTERN);
+
+    const add = (article) => {
+      if (!article || seen.has(article) || isOwnPost(article) || isAd(article)) return;
+      const id = tweetIdFromArticle(article);
+      if (!id) return;
+      if (page && id === page[1]) return;
+
+      seen.add(article);
+      comments.push({
+        id,
+        kind: page?.[3] ? "quote" : "reply",
+        author: authorHandle(article),
+        text: tweetBody(article),
+        ownText: tweetTexts(article).own.join("\n"),
+        images: tweetImages(article),
+        mediaPending: hasUnloadedMedia(article),
+        target: article.closest('[data-testid="cellInnerDiv"]') || article
+      });
+    };
+
+    const addAccount = (cell) => {
+      if (!cell || seen.has(cell)) return;
+      let handle = "";
+      for (const link of cell.querySelectorAll("a[href]")) {
+        handle = handleFromHref(link.getAttribute("href"));
+        if (handle) break;
+      }
+      if (!handle || handle === OWN_HANDLE) return;
+
+      const text = cleanText(
+        Array.from(cell.querySelectorAll('[dir="auto"], [dir="ltr"]'))
+          .filter((node) => !node.closest('[role="button"], button'))
+          .filter((node) => !node.parentElement?.closest('[dir="auto"], [dir="ltr"]'))
+          .map((node) => textWithEmoji(node))
+          .join(" | ")
+      ).slice(0, 800);
+
+      seen.add(cell);
+      comments.push({
+        id: `account:${handle}`,
+        kind: "account",
+        author: handle,
+        text: text || `@${handle}`,
+        images: [],
+        mediaPending: false,
+        target: cell.closest('[data-testid="cellInnerDiv"]') || cell
+      });
+    };
+
+    const addRepliesBelowFocal = (scope, findFocal) => {
+      if (!scope) return;
+      const cells = Array.from(
+        scope.querySelectorAll('[data-testid="cellInnerDiv"]')
+      );
+      const focalIndex = findFocal
+        ? cells.findIndex((cell) => {
           const article = cell.querySelector('article[data-testid="tweet"]');
-          return article && containsStatusLink(article, statusId);
-        });
+          return article && containsStatusLink(article, page[1]);
+        })
+        : -1;
 
       cells.forEach((cell, index) => {
         if (index <= focalIndex) return;
-
-        const article = cell.querySelector('article[data-testid="tweet"]');
-        if (article?.classList.contains(OWN_POST_CLASS)) return;
-
-        hiddenCells.add(cell);
+        add(cell.querySelector('article[data-testid="tweet"]'));
       });
+    };
+
+    if (page?.[3]) {
+      const column = document.querySelector('[data-testid="primaryColumn"]');
+      for (const article of column?.querySelectorAll('article[data-testid="tweet"]') || []) {
+        add(article);
+      }
+      for (const cell of column?.querySelectorAll('[data-testid="UserCell"]') || []) {
+        addAccount(cell);
+      }
+    } else if (page) {
+      addRepliesBelowFocal(
+        document.querySelector('[data-testid="primaryColumn"]'),
+        true
+      );
+      if (page[2]) {
+        addRepliesBelowFocal(document.querySelector('[role="dialog"]'), false);
+      }
     }
 
-    for (const cell of document.querySelectorAll(`.${HIDDEN_REPLY_CLASS}`)) {
-      if (!hiddenCells.has(cell)) cell.classList.remove(HIDDEN_REPLY_CLASS);
+    for (const scope of commentScopes()) {
+      for (const article of scope.querySelectorAll('article[data-testid="tweet"]')) {
+        if (isReplyingToOwnHandle(article)) add(article);
+      }
     }
 
-    for (const cell of hiddenCells) {
-      cell.classList.add(HIDDEN_REPLY_CLASS);
+    return comments;
+  };
+
+  const applyVerdict = (comment) => {
+    comment.target.classList.add(HIDDEN_REPLY_CLASS);
+    if (comment.mediaPending) return;
+    if (!comment.text && !comment.images.length) return;
+
+    if (comment.kind !== "account" && GEAR_QUESTION_PATTERN.test(comment.ownText)) return;
+
+    const hash = hashText(`${comment.text}\n${comment.images.join("\n")}`);
+    const cached = verdicts.get(comment.id);
+    if (cached && cached.hash === hash) {
+      comment.target.classList.toggle(HIDDEN_REPLY_CLASS, cached.hide);
+      return;
+    }
+
+    if (Date.now() < retryAfter || inflight.has(comment.id)) return;
+
+    inflight.add(comment.id);
+    classifyQueue.set(comment.id, {
+      id: comment.id,
+      kind: comment.kind,
+      author: comment.author,
+      text: comment.text,
+      images: comment.images,
+      hash
+    });
+  };
+
+  const STATUS_BANNER_ID = "x-count-masker-status";
+
+  const showStatus = (message) => {
+    let banner = document.getElementById(STATUS_BANNER_ID);
+    if (!banner) {
+      banner = document.createElement("div");
+      banner.id = STATUS_BANNER_ID;
+      document.body.appendChild(banner);
+    }
+    banner.textContent = message;
+  };
+
+  const clearStatus = () => {
+    document.getElementById(STATUS_BANNER_ID)?.remove();
+  };
+
+  const flushClassifications = () => {
+    const batch = Array.from(classifyQueue.values()).slice(0, 20);
+    if (!batch.length) return;
+
+    for (const item of batch) classifyQueue.delete(item.id);
+
+    try {
+      chrome.runtime.sendMessage(
+        { type: "classify-replies", replies: batch },
+        (response) => handleVerdicts(batch, response)
+      );
+    } catch (error) {
+      for (const item of batch) inflight.delete(item.id);
+      console.error("[x-count-masker] could not review replies", error);
+      showStatus(
+        "Replies are hidden because the extension was reloaded. Refresh this tab to review them."
+      );
     }
   };
+
+  const handleVerdicts = (batch, response) => {
+    const failed = Boolean(chrome.runtime.lastError) || !response?.ok;
+    for (const item of batch) inflight.delete(item.id);
+
+    if (failed) {
+      const reason =
+        chrome.runtime.lastError?.message || response?.error || "unknown error";
+      console.error("[x-count-masker] could not review replies", reason);
+      showStatus(
+        `Replies are hidden until they can be reviewed. Retrying in 15s. (${reason.slice(0, 160)})`
+      );
+      retryAfter = Date.now() + 15000;
+      for (const item of batch) classifyQueue.set(item.id, item);
+      clearTimeout(flushTimer);
+      flushTimer = setTimeout(() => {
+        flushTimer = 0;
+        flushClassifications();
+      }, 15000);
+      return;
+    }
+
+    retryAfter = 0;
+    clearStatus();
+
+    for (const verdict of response.verdicts || []) {
+      const item = batch.find((candidate) => candidate.id === verdict.id);
+      if (!item || verdict.hash !== item.hash) continue;
+      verdicts.set(verdict.id, { hide: Boolean(verdict.hide), hash: item.hash });
+    }
+
+    for (const item of batch) {
+      const cached = verdicts.get(item.id);
+      if (!cached || cached.hash !== item.hash) {
+        verdicts.set(item.id, { hide: true, hash: item.hash });
+      }
+    }
+
+    if (classifyQueue.size) flushClassifications();
+    scheduleScan();
+  };
+
+  const queueClassifications = () => {
+    if (!classifyQueue.size || flushTimer) return;
+    const wait = Math.max(400, retryAfter - Date.now());
+    flushTimer = setTimeout(() => {
+      flushTimer = 0;
+      flushClassifications();
+    }, wait);
+  };
+
+  const moderateOwnPostComments = () => {
+    const comments = collectOwnPostComments();
+    const activeTargets = new Set(comments.map((comment) => comment.target));
+
+    for (const cell of document.querySelectorAll(`.${HIDDEN_REPLY_CLASS}`)) {
+      if (!activeTargets.has(cell)) cell.classList.remove(HIDDEN_REPLY_CLASS);
+    }
+
+    if (!cacheReady) {
+      for (const comment of comments) {
+        comment.target.classList.add(HIDDEN_REPLY_CLASS);
+      }
+      return;
+    }
+
+    for (const comment of comments) applyVerdict(comment);
+    queueClassifications();
+  };
+
+  chrome.storage.local.get(VERDICT_STORAGE_KEY, (data) => {
+    for (const [id, entry] of Object.entries(data?.[VERDICT_STORAGE_KEY] || {})) {
+      if (entry && typeof entry.hide === "boolean" && entry.hash) {
+        verdicts.set(id, { hide: entry.hide, hash: entry.hash });
+      }
+    }
+    cacheReady = true;
+    scheduleScan();
+  });
 
   const scan = (root = document) => {
     blockNotificationsPage();
@@ -497,7 +883,7 @@
     maskLabelledMetricCounts(scanRoot);
     maskViewMetricCounts(scanRoot);
     lockOwnPosts(scanRoot);
-    hideRepliesOnOwnPostPage();
+    moderateOwnPostComments();
 
     for (const element of root.querySelectorAll("[aria-label]")) {
       if (hasActionLabel(element)) {
@@ -567,58 +953,6 @@
       if (!active || active.isContentEditable) return;
       if (active.matches("input, textarea, select")) return;
       if (!active.closest(`.${OWN_POST_CLASS}`)) return;
-
-      event.preventDefault();
-      event.stopImmediatePropagation();
-    },
-    true
-  );
-
-  const OWN_POST_ALLOWED_TARGET_SELECTOR = [
-    "button",
-    '[role="button"]',
-    '[role="link"]',
-    '[data-testid="videoPlayer"]',
-    '[data-testid="card.wrapper"]'
-  ].join(",");
-  const OWN_POST_BLOCKED_TARGET_SELECTOR =
-    '[data-testid="tweet-text-show-more-link"]';
-  const STATUS_LINK_PATTERN = /\/status\/\d+/;
-
-  const opensOwnPost = (target, article) => {
-    if (target.closest(OWN_POST_BLOCKED_TARGET_SELECTOR)) return true;
-
-    const quotedPost = target.closest('[role="link"]');
-    if (quotedPost && article.contains(quotedPost)) return false;
-
-    const link = target.closest("a[href]");
-    if (link && article.contains(link)) {
-      return STATUS_LINK_PATTERN.test(link.getAttribute("href") || "");
-    }
-
-    const allowed = target.closest(OWN_POST_ALLOWED_TARGET_SELECTOR);
-    return !allowed || !article.contains(allowed);
-  };
-
-  for (const eventName of ["click", "auxclick"]) {
-    document.addEventListener(
-      eventName,
-      (event) => {
-        const article = event.target.closest?.(`.${OWN_POST_CLASS}`);
-        if (!article || !opensOwnPost(event.target, article)) return;
-
-        event.preventDefault();
-        event.stopImmediatePropagation();
-      },
-      true
-    );
-  }
-
-  document.addEventListener(
-    "keydown",
-    (event) => {
-      if (event.key !== "Enter" && event.key.toLowerCase() !== "o") return;
-      if (!document.activeElement?.matches?.(`.${OWN_POST_CLASS}`)) return;
 
       event.preventDefault();
       event.stopImmediatePropagation();
