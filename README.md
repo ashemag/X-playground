@@ -40,7 +40,7 @@ Replies on your posts are sent to GPT 5.6 Sol (`gpt-5.6-sol`), including emoji a
 
 If a review can't run, a small banner at the bottom of the page says why. For example, after you reload the extension, it asks you to refresh the tab.
 
-Your own replies stay visible. A reply stays hidden until the review comes back, so a mean one doesn't flash on screen. If a review fails, the reply stays hidden and is retried. If OpenAI can't load a reply's image, an image-only reply stays hidden. Verdicts are cached in the extension, keyed by the reply and its content. The OpenAI key lives in `src/secrets.js`, which is gitignored.
+Your own replies stay visible. A reply stays hidden until the review comes back, so a mean one doesn't flash on screen. If a review fails, the reply stays hidden and is retried. If OpenAI can't load a reply's image, an image-only reply stays hidden. Verdicts are cached in the extension, keyed by the reply and its content. The OpenAI key is kept in `chrome.storage.local` (never in source), under the `openaiApiKey` key.
 
 ### Hides engagement counts
 
@@ -71,7 +71,7 @@ This extension hides signals in the page. It doesn't stop anyone from posting. I
 ## Setup
 
 1. In `src/content.js`, set `OWN_HANDLE` to your X handle without the `@`.
-2. `src/secrets.js` should already be present locally (gitignored). It holds the OpenAI key used to review replies. If it's missing, recreate it from `OPENAI_API_KEY` in the `ashe_ai` `.env` as `self.OPENAI_API_KEY = "...";`.
+2. Set the OpenAI key used to review replies by running, in the service worker console, `chrome.storage.local.set({ openaiApiKey: "..." })` with the `OPENAI_API_KEY` value from the `ashe_ai` `.env`.
 3. Open `chrome://extensions`.
 4. Enable `Developer mode`.
 5. Click `Load unpacked`.
