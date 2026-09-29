@@ -422,6 +422,61 @@
     }
   };
 
+  const HIDDEN_REPLY_CLASS = "x-count-masker-hidden-reply";
+  const OWN_STATUS_PATH_PATTERN = new RegExp(
+    String.raw`^/${OWN_HANDLE}/status/(\d+)(/photo/\d+|/video/\d+)?/?$`,
+    "i"
+  );
+
+  const containsStatusLink = (article, statusId) => {
+    const statusLinkPattern = new RegExp(`/status/${statusId}$`);
+
+    for (const link of article.querySelectorAll('a[href*="/status/"]')) {
+      if (statusLinkPattern.test(link.getAttribute("href") || "")) return true;
+    }
+
+    return false;
+  };
+
+  const hideRepliesOnOwnPostPage = () => {
+    const match = location.pathname.match(OWN_STATUS_PATH_PATTERN);
+    const hiddenCells = new Set();
+
+    if (match) {
+      const statusId = match[1];
+      const isMediaView = Boolean(match[2]);
+      const scope = isMediaView
+        ? document.querySelector('[role="dialog"]')
+        : document.querySelector('[data-testid="primaryColumn"]');
+      const cells = scope
+        ? Array.from(scope.querySelectorAll('[data-testid="cellInnerDiv"]'))
+        : [];
+      const focalIndex = isMediaView
+        ? -1
+        : cells.findIndex((cell) => {
+          const article = cell.querySelector('article[data-testid="tweet"]');
+          return article && containsStatusLink(article, statusId);
+        });
+
+      cells.forEach((cell, index) => {
+        if (index <= focalIndex) return;
+
+        const article = cell.querySelector('article[data-testid="tweet"]');
+        if (article?.classList.contains(OWN_POST_CLASS)) return;
+
+        hiddenCells.add(cell);
+      });
+    }
+
+    for (const cell of document.querySelectorAll(`.${HIDDEN_REPLY_CLASS}`)) {
+      if (!hiddenCells.has(cell)) cell.classList.remove(HIDDEN_REPLY_CLASS);
+    }
+
+    for (const cell of hiddenCells) {
+      cell.classList.add(HIDDEN_REPLY_CLASS);
+    }
+  };
+
   const scan = (root = document) => {
     blockNotificationsPage();
     blockNotificationsLinks(root);
@@ -442,6 +497,7 @@
     maskLabelledMetricCounts(scanRoot);
     maskViewMetricCounts(scanRoot);
     lockOwnPosts(scanRoot);
+    hideRepliesOnOwnPostPage();
 
     for (const element of root.querySelectorAll("[aria-label]")) {
       if (hasActionLabel(element)) {
@@ -511,6 +567,58 @@
       if (!active || active.isContentEditable) return;
       if (active.matches("input, textarea, select")) return;
       if (!active.closest(`.${OWN_POST_CLASS}`)) return;
+
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true
+  );
+
+  const OWN_POST_ALLOWED_TARGET_SELECTOR = [
+    "button",
+    '[role="button"]',
+    '[role="link"]',
+    '[data-testid="videoPlayer"]',
+    '[data-testid="card.wrapper"]'
+  ].join(",");
+  const OWN_POST_BLOCKED_TARGET_SELECTOR =
+    '[data-testid="tweet-text-show-more-link"]';
+  const STATUS_LINK_PATTERN = /\/status\/\d+/;
+
+  const opensOwnPost = (target, article) => {
+    if (target.closest(OWN_POST_BLOCKED_TARGET_SELECTOR)) return true;
+
+    const quotedPost = target.closest('[role="link"]');
+    if (quotedPost && article.contains(quotedPost)) return false;
+
+    const link = target.closest("a[href]");
+    if (link && article.contains(link)) {
+      return STATUS_LINK_PATTERN.test(link.getAttribute("href") || "");
+    }
+
+    const allowed = target.closest(OWN_POST_ALLOWED_TARGET_SELECTOR);
+    return !allowed || !article.contains(allowed);
+  };
+
+  for (const eventName of ["click", "auxclick"]) {
+    document.addEventListener(
+      eventName,
+      (event) => {
+        const article = event.target.closest?.(`.${OWN_POST_CLASS}`);
+        if (!article || !opensOwnPost(event.target, article)) return;
+
+        event.preventDefault();
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+  }
+
+  document.addEventListener(
+    "keydown",
+    (event) => {
+      if (event.key !== "Enter" && event.key.toLowerCase() !== "o") return;
+      if (!document.activeElement?.matches?.(`.${OWN_POST_CLASS}`)) return;
 
       event.preventDefault();
       event.stopImmediatePropagation();

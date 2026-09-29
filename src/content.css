@@ -51,6 +51,10 @@ a[href$="/retweets"] [data-testid="app-text-transition-container"] {
   opacity: 0.35 !important;
 }
 
+.x-count-masker-hidden-reply {
+  display: none !important;
+}
+
 .x-count-masker-follower-count:not(.x-count-masker-follower-count--revealed) {
   color: transparent !important;
   text-shadow: none !important;

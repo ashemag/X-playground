@@ -23,6 +23,7 @@ A post counts as yours when its author handle matches `OWN_HANDLE` in `src/conte
 
 - The reply and like buttons are dimmed and can't be clicked. That includes un-liking.
 - The `r` (reply) and `l` (like) keyboard shortcuts are blocked when a post of yours is focused.
+- Clicking the post body, timestamp, photos, or "Show more" doesn't open the post's page, so you can't reach its replies that way. `Enter` and `o` are blocked too. If you land on the post's page anyway (a link or a typed URL), everything below your post is hidden except your own replies, and the same goes for the reply panel in the photo viewer. Your name, avatar, links in your text, link previews, videos, and quoted posts still work.
 - Repost, bookmark, share, and view analytics still work.
 
 Your profile page is mostly your own posts, so most reply buttons there will be locked.
@@ -73,6 +74,7 @@ After editing any file, click the reload icon on the extension in `chrome://exte
 The defaults are the strictest setting. There's no options page yet, so each setting is changed in the code:
 
 - **Unlock replying to or liking your own posts**: remove entries from `LOCKED_ACTION_TEST_IDS` and `LOCKED_SHORTCUT_KEYS` in `src/content.js`, and remove the matching `.x-count-masker-own-post [data-testid="..."]` selectors in `src/content.css` so the buttons are no longer dimmed.
+- **Allow opening your own posts**: delete the `click`/`auxclick` listener that calls `opensOwnPost` and the `keydown` listener for `Enter`/`o` in `src/content.js`.
 - **Bring back notifications**: in `src/content.js`, delete the `blockNotificationsPage` and `blockNotificationsLinks` calls in `scan()`, the `popstate` listener, and the click listener that checks `NOTIFICATIONS_LINK_SELECTOR`. Then delete the `AppTabBar_Notifications_Link` rules in `src/content.css`. To keep unread badges, also delete the `maskNavBadges`, `maskTitleCount`, and `maskFaviconBadge` calls in `scan()`.
 - **Show a specific count again** (for example, likes): remove its `data-testid` entries (such as `"like"` and `"unlike"`) from `ACTION_TEST_IDS` in `src/content.js`, and remove its word (such as `Likes?`) from `MASKED_METRIC_LABEL_WORDS`, which covers the counts on a post's own page. Reply and repost counts are also hidden by a rule near the top of `src/content.css`; delete the matching lines there too.
 - **Show follower counts by default**: delete the `maskFollowerCount` loop in `scan()` in `src/content.js`.
