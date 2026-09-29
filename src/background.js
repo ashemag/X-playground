@@ -1,5 +1,3 @@
-importScripts("secrets.js");
-
 const MODEL = "gpt-5.6-sol";
 const VERDICT_STORAGE_KEY = "replyVerdicts.v3";
 
@@ -103,8 +101,8 @@ const buildUserContent = (replies, withImages) => {
 };
 
 const requestVerdicts = async (replies, withImages) => {
-  const key = self.OPENAI_API_KEY;
-  if (!key) throw new Error("Missing OpenAI API key");
+  const { openaiApiKey: key } = await chrome.storage.local.get("openaiApiKey");
+  if (!key) throw new Error("Missing OpenAI API key. Set it with chrome.storage.local.set({ openaiApiKey: \"...\" }).");
 
   const response = await fetch("https://api.openai.com/v1/responses", {
     method: "POST",
