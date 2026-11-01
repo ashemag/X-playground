@@ -1,4 +1,7 @@
-.x-count-masker-count {
+.x-count-masker-count,
+.x-count-masker-count *,
+.x-engagement-button .x-animated-count-visual,
+.x-engagement-button .x-animated-count-visual * {
   color: transparent !important;
   text-shadow: none !important;
   user-select: none !important;
@@ -28,6 +31,21 @@ a[href$="/retweets"] [data-testid="app-text-transition-container"] {
   cursor: default !important;
 }
 
+/* X's new navigation uses regular links and SVG icons instead of test IDs. */
+.x-count-masker-notifications {
+  pointer-events: none !important;
+  cursor: default !important;
+}
+
+.x-count-masker-notifications svg {
+  background: rgb(113, 118, 123) !important;
+  border-radius: 9999px !important;
+}
+
+.x-count-masker-notifications svg * {
+  visibility: hidden !important;
+}
+
 [data-testid="AppTabBar_Notifications_Link"] > div {
   position: relative !important;
 }
@@ -44,9 +62,14 @@ a[href$="/retweets"] [data-testid="app-text-transition-container"] {
   background: rgb(113, 118, 123);
 }
 
-.x-count-masker-own-post [data-testid="reply"],
 .x-count-masker-own-post [data-testid="like"],
 .x-count-masker-own-post [data-testid="unlike"] {
+  cursor: not-allowed !important;
+  opacity: 0.35 !important;
+}
+
+.x-count-masker-own-post .x-engagement-button:is([aria-label="Like"], [aria-label="Unlike"], [aria-label="Undo like"]),
+.x-count-masker-own-post .x-engagement-button:has(use[href="#icon-heart"], use[href="#icon-heart-fill"]) {
   cursor: not-allowed !important;
   opacity: 0.35 !important;
 }
@@ -68,15 +91,42 @@ a[href$="/retweets"] [data-testid="app-text-transition-container"] {
   color: rgb(231, 233, 234);
   font: 13px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
-.x-count-masker-follower-count:not(.x-count-masker-follower-count--revealed) {
+#x-count-masker-status.x-count-masker-status--loading::before {
+  content: "";
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(231, 233, 234, 0.3);
+  border-top-color: rgb(231, 233, 234);
+  border-radius: 50%;
+  animation: x-count-masker-spin 0.8s linear infinite;
+}
+
+@keyframes x-count-masker-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.x-count-masker-follower-count,
+.x-count-masker-follower-count * {
   color: transparent !important;
   text-shadow: none !important;
   user-select: none !important;
 }
 
-.x-count-masker-follower-count:not(.x-count-masker-follower-count--revealed)::selection {
+.x-count-masker-follower-count::selection,
+.x-count-masker-follower-count *::selection {
   color: transparent !important;
   background: transparent !important;
+}
+
+/* Hide an already-open popup only while your follower link is hovered/focused. */
+body:has(.x-count-masker-own-followers:is(:hover, :focus-within)) [role="tooltip"] {
+  display: none !important;
 }

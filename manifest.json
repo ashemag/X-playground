@@ -1,14 +1,16 @@
 {
   "manifest_version": 3,
   "name": "X Playground",
-  "version": "0.2.0",
-  "description": "Blocks notifications, hides engagement and follower counts, locks replies and likes on your own X posts, and hides negative replies on those posts.",
+  "version": "0.3.16",
+  "description": "Blocks notifications, hides counts, locks likes on your own X posts, with reply review paused.",
   "permissions": ["storage"],
-  "host_permissions": ["https://api.openai.com/*"],
-  "background": {
-    "service_worker": "src/background.js"
-  },
   "content_scripts": [
+    {
+      "matches": ["https://x.com/*", "https://twitter.com/*"],
+      "js": ["src/title.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
+    },
     {
       "matches": [
         "https://x.com/*",
@@ -20,7 +22,7 @@
       "css": [
         "src/content.css"
       ],
-      "run_at": "document_idle"
+      "run_at": "document_start"
     }
   ]
 }

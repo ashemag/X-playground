@@ -1,4 +1,6 @@
 (() => {
+  // Temporarily paused to avoid API charges. The manifest also disables the worker.
+  const LLM_FILTER_ENABLED = false;
   const ACTION_TEST_IDS = [
     "reply",
     "retweet",
@@ -51,14 +53,17 @@
   const VIEW_METRIC_LABEL_PATTERN = /\b(Views?|Impressions?)\b/i;
   const ACTION_SELECTOR = ACTION_TEST_IDS
     .map((testId) => `[data-testid="${testId}"]`)
-    .join(",");
-  const VIEW_ACTION_SELECTOR = '[data-testid="view"], [data-testid="analytics"]';
+    .join(",") + ", .x-engagement-button";
+  const VIEW_ACTION_SELECTOR = '[data-testid="view"], [data-testid="analytics"], article a[href$="/analytics"]';
   const FOLLOWER_LINK_SELECTOR =
     'a[href*="/followers"], a[href*="/verified_followers"]';
   const METRIC_TEXT_SELECTOR =
     'span, div[dir="auto"], [data-testid="app-text-transition-container"]';
   const USER_TEXT_SELECTOR =
-    '[data-testid="tweetText"], [data-testid="card.wrapper"]';
+    '[data-testid="tweetText"], [data-testid="card.wrapper"], article [dir="auto"].whitespace-pre-wrap';
+  const POST_TEXT_SELECTOR =
+    '[data-testid="tweetText"], [dir="auto"].whitespace-pre-wrap';
+  const PRIMARY_COLUMN_SELECTOR = '[data-testid="primaryColumn"], main';
 
   const hasActionLabel = (element) => {
     const label = element.getAttribute("aria-label") || "";
@@ -77,16 +82,18 @@
   };
 
   const maskVisibleCountNode = (element) => {
+    // A pill's textContent can be just a number even when it also holds the icon.
+    if (element.querySelector("svg")) return;
     if (element.classList.contains("x-count-masker-count")) return;
     element.classList.add("x-count-masker-count");
     element.setAttribute("aria-hidden", "true");
   };
 
   const markFollowerCountNode = (element) => {
-    if (element.classList.contains("x-count-masker-follower-count")) return;
-
     element.classList.add("x-count-masker-follower-count");
-    element.title = "Double-click to show follower count";
+    element.classList.remove("x-count-masker-follower-count--revealed");
+    element.removeAttribute("title");
+    element.setAttribute("aria-hidden", "true");
   };
 
   const sanitizeActionLabel = (element) => {
@@ -96,7 +103,7 @@
     element.dataset.xCountMaskerLastLabel = label;
 
     const sanitized = label
-      .replace(/\b\d{1,3}(?:,\d{3})*(?:\.\d+)?\s*[KMB]?\s+(Replies|Reply|Reposts|Repost|Retweets|Retweet|Quotes|Quote|Likes|Like|Bookmarks|Bookmark|Impressions|Impression|Views|View)\b/gi, "$1")
+      .replace(new RegExp(String.raw`\b${COUNT_VALUE_PATTERN}\s+(Replies|Reply|Reposts|Repost|Retweets|Retweet|Quotes|Quote|Likes|Like|Bookmarks|Bookmark|Impressions|Impression|Views|View)\b`, "gi"), "$1")
       .replace(/\s{2,}/g, " ")
       .trim();
 
@@ -109,11 +116,16 @@
     if (!actionElement) return;
     sanitizeActionLabel(actionElement);
 
-    const candidates = actionElement.querySelectorAll(
-      METRIC_TEXT_SELECTOR
-    );
+    // The new X UI animates individual digits. Hide the whole visual, including
+    // the temporary old/new digits during a transition, before checking text.
+    for (const visual of actionElement.querySelectorAll(".x-animated-count-visual")) {
+      maskVisibleCountNode(visual);
+    }
+
+    const candidates = actionElement.querySelectorAll("span, div");
 
     for (const candidate of candidates) {
+      if (candidate.closest(USER_TEXT_SELECTOR)) continue;
       const text = candidate.textContent || "";
       if (isCountText(text)) {
         maskVisibleCountNode(candidate);
@@ -126,6 +138,7 @@
 
     const candidates = container.querySelectorAll(METRIC_TEXT_SELECTOR);
     for (const candidate of candidates) {
+      if (candidate.closest(USER_TEXT_SELECTOR)) continue;
       const text = candidate.textContent || "";
       if (isCountText(text)) {
         maskVisibleCountNode(candidate);
@@ -137,6 +150,7 @@
     let container = element;
 
     for (let depth = 0; container && depth < 5; depth++) {
+      if (container.matches("article")) return;
       if (hasCountText(container)) {
         maskCountsInContainer(container);
         return;
@@ -203,7 +217,36 @@
     return countElement;
   };
 
+  const isOwnFollowerLink = (linkElement) => {
+    if (!linkElement) return false;
+    try {
+      const url = new URL(linkElement.getAttribute("href") || "", "https://x.com");
+      if (!["x.com", "twitter.com", "www.x.com", "www.twitter.com"].includes(url.hostname)) return false;
+      const match = url.pathname.match(/^\/([^/]+)\/(?:followers|verified_followers)(?:\/|$)/i);
+      return match?.[1].toLowerCase() === OWN_HANDLE.toLowerCase();
+    } catch {
+      return false;
+    }
+  };
+
   const maskFollowerCount = (linkElement) => {
+    const isOwn = isOwnFollowerLink(linkElement);
+    linkElement.classList.toggle("x-count-masker-own-followers", isOwn);
+    if (!isOwn) {
+      // X can reuse profile/card elements when navigating between accounts.
+      for (const element of linkElement.querySelectorAll(".x-count-masker-follower-count")) {
+        element.classList.remove("x-count-masker-follower-count", "x-count-masker-follower-count--revealed");
+        element.removeAttribute("aria-hidden");
+      }
+      return;
+    }
+
+    // X can put the exact count in a tooltip on the link or a nested element.
+    linkElement.removeAttribute("title");
+    for (const element of linkElement.querySelectorAll("[title]")) {
+      element.removeAttribute("title");
+    }
+
     const countNode = findFollowerCountNode(linkElement) ||
       wrapFollowerCountText(linkElement);
     if (!countNode) return;
@@ -308,7 +351,9 @@
   const maskViewMetricCounts = (root) => {
     for (const viewAction of root.querySelectorAll(VIEW_ACTION_SELECTOR)) {
       maskActionCounts(viewAction);
-      maskNearbyViewMetricCount(viewAction);
+      if (!viewAction.matches('a[href$="/analytics"], .x-engagement-button')) {
+        maskNearbyViewMetricCount(viewAction);
+      }
     }
 
     for (const labelledElement of root.querySelectorAll("[aria-label]")) {
@@ -317,11 +362,13 @@
 
       sanitizeActionLabel(labelledElement);
       maskActionCounts(labelledElement);
-      maskNearbyViewMetricCount(labelledElement);
+      if (!labelledElement.matches(".x-engagement-button")) {
+        maskNearbyViewMetricCount(labelledElement);
+      }
     }
   };
 
-  const NAV_TAB_SELECTOR = '[data-testid^="AppTabBar_"]';
+  const NAV_TAB_SELECTOR = '[data-testid^="AppTabBar_"], nav a[aria-label]';
   const TITLE_COUNT_PATTERN = /^\s*\(\s*\d+\+?\s*\)\s*/;
   const NAV_LABEL_COUNT_PATTERN =
     /\s*\(?\s*\d+\+?\s+(?:new|unread)\s+[^)]*\)?|\s*\(\s*\d+\+?\s*\)/gi;
@@ -330,6 +377,12 @@
   const maskNavBadges = (root) => {
     for (const tab of root.querySelectorAll(NAV_TAB_SELECTOR)) {
       for (const badge of tab.querySelectorAll("[aria-live]")) {
+        badge.classList.add("x-count-masker-badge");
+        badge.setAttribute("aria-hidden", "true");
+      }
+
+      for (const badge of tab.querySelectorAll("span[aria-label]")) {
+        if (!/^\d+\+?$/.test(badge.getAttribute("aria-label") || "")) continue;
         badge.classList.add("x-count-masker-badge");
         badge.setAttribute("aria-hidden", "true");
       }
@@ -375,6 +428,7 @@
 
   const blockNotificationsLinks = (root) => {
     for (const link of root.querySelectorAll(NOTIFICATIONS_LINK_SELECTOR)) {
+      link.classList.add("x-count-masker-notifications");
       link.setAttribute("tabindex", "-1");
       link.setAttribute("aria-disabled", "true");
     }
@@ -383,29 +437,20 @@
   const OWN_HANDLE = "ashebytes";
   const OWN_POST_CLASS = "x-count-masker-own-post";
   const LOCKED_ACTION_TEST_IDS = [
-    "reply",
     "like",
     "unlike"
   ];
   const LOCKED_ACTION_SELECTOR = LOCKED_ACTION_TEST_IDS
     .map((testId) => `.${OWN_POST_CLASS} [data-testid="${testId}"]`)
-    .join(",");
-  const LOCKED_SHORTCUT_KEYS = new Set(["l", "r"]);
+    .join(",") + `, .${OWN_POST_CLASS} .x-engagement-button:is([aria-label="Like"], [aria-label="Unlike"], [aria-label="Undo like"]), .${OWN_POST_CLASS} .x-engagement-button:has(use[href="#icon-heart"], use[href="#icon-heart-fill"])`;
+  const LOCKED_SHORTCUT_KEYS = new Set(["l"]);
 
   const isOwnPost = (article) => {
-    const authorName = article.querySelector('[data-testid="User-Name"]');
-    if (!authorName) return false;
-
-    for (const link of authorName.querySelectorAll("a[href]")) {
-      const handle = (link.getAttribute("href") || "").replace(/^\//, "");
-      if (handle.toLowerCase() === OWN_HANDLE) return true;
-    }
-
-    return false;
+    return authorHandle(article) === OWN_HANDLE;
   };
 
   const lockOwnPosts = (root) => {
-    for (const article of root.querySelectorAll('article[data-testid="tweet"]')) {
+    for (const article of postArticles(root)) {
       if (!isOwnPost(article)) {
         article.classList.remove(OWN_POST_CLASS);
         continue;
@@ -423,20 +468,19 @@
   };
 
   const HIDDEN_REPLY_CLASS = "x-count-masker-hidden-reply";
-  const OWN_STATUS_PATH_PATTERN = new RegExp(
-    String.raw`^/${OWN_HANDLE}/status/(\d+)(/photo/\d+|/video/\d+)?(/retweets(?:/with_comments)?|/quotes|/likes)?/?$`,
-    "i"
-  );
-  const GEAR_QUESTION_PATTERN = new RegExp(
-    [
-      String.raw`\b(?:camera|cam|cams|lens|lenses|dslr|mirrorless|gear|rig)\b`,
-      String.raw`\b(?:shot|shoot|shooting|film|filmed|filming|record|recorded|recording)\s+(?:this\s+|that\s+|it\s+)?(?:on|with)\b`,
-      String.raw`\bwhat\s+(?:phone|device)\b`,
-      String.raw`\b(?:canon|nikon|sony\s+a\d|fuji|fujifilm|leica|gopro|insta360|lumix|blackmagic|red\s+komodo)\b`
-    ].join("|"),
-    "i"
-  );
+  const STATUS_PATH_PATTERN =
+    /^\/([A-Za-z0-9_]+)\/status\/(\d+)(\/photo\/\d+|\/video\/\d+)?(\/retweets(?:\/with_comments)?|\/quotes|\/likes)?\/?$/i;
 
+  const parseStatusPath = () => {
+    const match = location.pathname.match(STATUS_PATH_PATTERN);
+    if (!match) return null;
+    return {
+      handle: match[1].toLowerCase(),
+      id: match[2],
+      media: Boolean(match[3]),
+      activity: Boolean(match[4])
+    };
+  };
   const containsStatusLink = (article, statusId) => {
     const statusLinkPattern = new RegExp(`/status/${statusId}$`);
 
@@ -447,12 +491,11 @@
     return false;
   };
 
-  const VERDICT_STORAGE_KEY = "replyVerdicts.v3";
-  const COMMENT_SCOPES = '[data-testid="primaryColumn"], [role="dialog"]';
+  const VERDICT_STORAGE_KEY = "replyVerdicts.v9";
   const verdicts = new Map();
   const inflight = new Set();
   const classifyQueue = new Map();
-  let cacheReady = false;
+  let cacheReady = !LLM_FILTER_ENABLED;
   let flushTimer = 0;
   let retryAfter = 0;
 
@@ -476,7 +519,8 @@
 
   const tweetIdFromArticle = (article) => {
     const timeLink = article.querySelector('a[href*="/status/"] time')?.closest("a");
-    const href = timeLink?.getAttribute("href") || "";
+    const href = timeLink?.getAttribute("href") ||
+      article.querySelector('a[href*="/status/"]')?.getAttribute("href") || "";
     const match = href.match(/\/status\/(\d+)/);
     return match ? match[1] : null;
   };
@@ -508,15 +552,20 @@
   };
 
   const isInQuotedPost = (element, article) => {
+    if (element.closest("article") !== article) return true;
     const quoted = element.closest('[role="link"]');
-    return Boolean(quoted && article.contains(quoted) && quoted !== article);
+    if (!quoted || quoted === article || !article.contains(quoted)) return false;
+
+    const authorName = article.querySelector('[data-testid="User-Name"]');
+    if (authorName && quoted.contains(authorName)) return false;
+    return Boolean(quoted.querySelector('[data-testid="User-Name"], a[href*="/status/"]'));
   };
 
   const tweetTexts = (article) => {
     const own = [];
     const quoted = [];
 
-    for (const node of article.querySelectorAll('[data-testid="tweetText"]')) {
+    for (const node of article.querySelectorAll(POST_TEXT_SELECTOR)) {
       const text = cleanText(textWithEmoji(node));
       if (!text) continue;
       (isInQuotedPost(node, article) ? quoted : own).push(text);
@@ -581,9 +630,9 @@
 
   const authorHandle = (article) => {
     const authorName = article.querySelector('[data-testid="User-Name"]');
-    if (!authorName) return "";
-
-    for (const link of authorName.querySelectorAll("a[href]")) {
+    // Both layouts put the author's profile links before post text and quotes.
+    for (const link of (authorName || article).querySelectorAll("a[href]")) {
+      if (!authorName && !/^\/(?:[A-Za-z0-9_]+)\/?$/.test(link.getAttribute("href") || "")) continue;
       const handle = handleFromHref(link.getAttribute("href"));
       if (handle) return handle;
     }
@@ -597,47 +646,42 @@
       return (span.textContent || "").trim() === "Ad";
     });
 
-  const isReplyingToOwnHandle = (article) => {
-    const walker = document.createTreeWalker(article, NodeFilter.SHOW_TEXT);
-    let node = walker.nextNode();
+  const postArticles = (scope) =>
+    scope ? Array.from(scope.querySelectorAll('article')).filter((article) =>
+      !article.parentElement?.closest("article") &&
+      (article.matches('[data-testid="tweet"]') || article.querySelector('a[href*="/status/"]'))
+    ) : [];
 
-    while (node) {
-      if (/^\s*Replying to\s*$/i.test(node.nodeValue || "")) {
-        let container = node.parentElement;
-        for (let depth = 0; container && container !== article && depth < 5; depth++) {
-          const label = (container.textContent || "").trim();
-          if (/^Replying to\b/i.test(label) && label.length < 240) {
-            for (const link of container.querySelectorAll("a[href]")) {
-              if (handleFromHref(link.getAttribute("href")) === OWN_HANDLE) return true;
-            }
-          }
-          container = container.parentElement;
-        }
-      }
-      node = walker.nextNode();
-    }
+  const conversationHost = (page) => {
+    if (page.media || page.activity) return page.handle;
 
-    return false;
+    const articles = postArticles(document.querySelector(PRIMARY_COLUMN_SELECTOR));
+    const focalIndex = articles.findIndex(
+      (article) =>
+        tweetIdFromArticle(article) === page.id || containsStatusLink(article, page.id)
+    );
+    if (focalIndex === -1) return page.handle === OWN_HANDLE ? OWN_HANDLE : "";
+    return authorHandle(articles[0]);
   };
 
-  const commentScopes = () =>
-    Array.from(document.querySelectorAll(COMMENT_SCOPES));
+  let filteringActive = false;
 
   const collectOwnPostComments = () => {
     const comments = [];
     const seen = new Set();
-    const page = location.pathname.match(OWN_STATUS_PATH_PATTERN);
+    const page = parseStatusPath();
+    filteringActive = Boolean(page) && conversationHost(page) === OWN_HANDLE;
+    if (!filteringActive) return comments;
 
     const add = (article) => {
       if (!article || seen.has(article) || isOwnPost(article) || isAd(article)) return;
       const id = tweetIdFromArticle(article);
       if (!id) return;
-      if (page && id === page[1]) return;
 
       seen.add(article);
       comments.push({
         id,
-        kind: page?.[3] ? "quote" : "reply",
+        kind: page.activity ? "quote" : "reply",
         author: authorHandle(article),
         text: tweetBody(article),
         ownText: tweetTexts(article).own.join("\n"),
@@ -676,66 +720,100 @@
       });
     };
 
-    const addRepliesBelowFocal = (scope, findFocal) => {
-      if (!scope) return;
-      const cells = Array.from(
-        scope.querySelectorAll('[data-testid="cellInnerDiv"]')
-      );
-      const focalIndex = findFocal
-        ? cells.findIndex((cell) => {
-          const article = cell.querySelector('article[data-testid="tweet"]');
-          return article && containsStatusLink(article, page[1]);
-        })
-        : -1;
+    const column = document.querySelector(PRIMARY_COLUMN_SELECTOR);
 
-      cells.forEach((cell, index) => {
-        if (index <= focalIndex) return;
-        add(cell.querySelector('article[data-testid="tweet"]'));
-      });
-    };
-
-    if (page?.[3]) {
-      const column = document.querySelector('[data-testid="primaryColumn"]');
-      for (const article of column?.querySelectorAll('article[data-testid="tweet"]') || []) {
-        add(article);
-      }
+    if (page.activity) {
+      for (const article of postArticles(column)) add(article);
       for (const cell of column?.querySelectorAll('[data-testid="UserCell"]') || []) {
         addAccount(cell);
       }
-    } else if (page) {
-      addRepliesBelowFocal(
-        document.querySelector('[data-testid="primaryColumn"]'),
-        true
-      );
-      if (page[2]) {
-        addRepliesBelowFocal(document.querySelector('[role="dialog"]'), false);
+      return comments;
+    }
+
+    if (page.media) {
+      for (const article of postArticles(document.querySelector('[role="dialog"]'))) {
+        add(article);
       }
     }
 
-    for (const scope of commentScopes()) {
-      for (const article of scope.querySelectorAll('article[data-testid="tweet"]')) {
-        if (isReplyingToOwnHandle(article)) add(article);
-      }
+    const columnIsConversation = postArticles(column).some(
+      (article) =>
+        tweetIdFromArticle(article) === page.id || containsStatusLink(article, page.id)
+    );
+    if (!page.media || columnIsConversation) {
+      for (const article of postArticles(column)) add(article);
     }
 
     return comments;
   };
 
-  const applyVerdict = (comment) => {
-    comment.target.classList.add(HIDDEN_REPLY_CLASS);
-    if (comment.mediaPending) return;
-    if (!comment.text && !comment.images.length) return;
+  const COLLAPSED_REPLIES_PATTERN =
+    /\bshow (?:more|additional) replies\b|\bshow probable spam\b/i;
+  const expandedReplySections = new WeakSet();
 
-    if (comment.kind !== "account" && GEAR_QUESTION_PATTERN.test(comment.ownText)) return;
+  const expandCollapsedReplies = () => {
+    const column = document.querySelector(PRIMARY_COLUMN_SELECTOR);
+    if (!column) return;
+
+    for (const cell of column.querySelectorAll('[data-testid="cellInnerDiv"], li')) {
+      if (expandedReplySections.has(cell) || cell.querySelector("article")) continue;
+      if (!COLLAPSED_REPLIES_PATTERN.test(cell.textContent || "")) continue;
+
+      const button = cell.querySelector('[role="button"], button');
+      if (!button) continue;
+      expandedReplySections.add(cell);
+      button.click();
+    }
+  };
+
+  const MEDIA_WAIT_MS = 8000;
+  const firstSeen = new Map();
+
+  const setReason = (comment, reason) => {
+    if (comment.target.dataset.xPlaygroundReason !== reason) {
+      comment.target.dataset.xPlaygroundReason = reason;
+    }
+  };
+
+  const applyVerdict = (comment) => {
+    // Hide only on a positive match; loading and review failures stay visible.
+    comment.target.classList.remove(HIDDEN_REPLY_CLASS);
+
+    if (!LLM_FILTER_ENABLED) {
+      setReason(comment, "ai-paused");
+      return false;
+    }
+
+    if (!firstSeen.has(comment.id)) {
+      firstSeen.set(comment.id, Date.now());
+      if (comment.mediaPending) setTimeout(scheduleScan, MEDIA_WAIT_MS + 50);
+    }
+    if (comment.mediaPending) {
+      if (Date.now() - firstSeen.get(comment.id) < MEDIA_WAIT_MS) {
+        setReason(comment, "media-not-loaded");
+        return true;
+      }
+      if (!comment.text) {
+        setReason(comment, "media-not-loaded");
+        return false;
+      }
+      comment.text = `${comment.text}\n[also has a photo or video that could not be loaded]`;
+    }
+    if (!comment.text && !comment.images.length) {
+      setReason(comment, "no-text-found");
+      return false;
+    }
 
     const hash = hashText(`${comment.text}\n${comment.images.join("\n")}`);
     const cached = verdicts.get(comment.id);
-    if (cached && cached.hash === hash) {
+    if (cached && cached.hash === hash && (!cached.expiresAt || Date.now() < cached.expiresAt)) {
       comment.target.classList.toggle(HIDDEN_REPLY_CLASS, cached.hide);
-      return;
+      setReason(comment, cached.hide ? cached.reason || "model" : "shown");
+      return false;
     }
 
-    if (Date.now() < retryAfter || inflight.has(comment.id)) return;
+    setReason(comment, "reviewing");
+    if (Date.now() < retryAfter || inflight.has(comment.id)) return true;
 
     inflight.add(comment.id);
     classifyQueue.set(comment.id, {
@@ -743,44 +821,139 @@
       kind: comment.kind,
       author: comment.author,
       text: comment.text,
+      ownText: comment.ownText,
       images: comment.images,
       hash
     });
+    return true;
   };
 
   const STATUS_BANNER_ID = "x-count-masker-status";
+  const RELOADED_MESSAGE =
+    "Reply review is unavailable. Unreviewed replies stay visible. Refresh this tab after reloading the extension.";
+  let statusError = "";
+  let slowReview = false;
+  let wasReviewing = false;
+  let doneTimer = 0;
 
-  const showStatus = (message) => {
+  const renderStatus = (message, loading) => {
+    if (!document.body) return;
     let banner = document.getElementById(STATUS_BANNER_ID);
+    if (!message) {
+      banner?.remove();
+      return;
+    }
     if (!banner) {
       banner = document.createElement("div");
       banner.id = STATUS_BANNER_ID;
+      banner.setAttribute("role", "status");
       document.body.appendChild(banner);
     }
-    banner.textContent = message;
+    if (banner.textContent !== message) banner.textContent = message;
+    banner.classList.toggle("x-count-masker-status--loading", loading);
+  };
+
+  const showStatus = (message) => {
+    statusError = message;
+    renderStatus(message, false);
   };
 
   const clearStatus = () => {
-    document.getElementById(STATUS_BANNER_ID)?.remove();
+    statusError = "";
+  };
+
+  const updateReviewStatus = (pendingCount, commentCount, hiddenCount = 0) => {
+    if (!LLM_FILTER_ENABLED) {
+      renderStatus(filteringActive ? "Reply review paused" : "", false);
+      return;
+    }
+    if (!chrome.runtime?.id) statusError = RELOADED_MESSAGE;
+    const onOwnPostPage = filteringActive;
+
+    if (statusError) {
+      clearTimeout(doneTimer);
+      doneTimer = 0;
+      renderStatus(statusError, false);
+      return;
+    }
+
+    if (pendingCount > 0) {
+      clearTimeout(doneTimer);
+      doneTimer = 0;
+      wasReviewing = true;
+      renderStatus(
+        slowReview
+          ? "Still reviewing replies… If this stays, reload the extension in chrome://extensions and refresh this tab."
+          : "Reviewing replies…",
+        true
+      );
+      return;
+    }
+
+    if (onOwnPostPage) {
+      clearTimeout(doneTimer);
+      doneTimer = 0;
+      wasReviewing = false;
+      renderStatus(
+        commentCount === 0
+          ? "Filter on · no replies loaded on this page yet"
+          : hiddenCount === 0
+            ? "Filter on · no loaded replies hidden"
+            : "Replies filtered",
+        false
+      );
+      return;
+    }
+
+    if (wasReviewing) {
+      wasReviewing = false;
+      renderStatus("Replies reviewed", false);
+      doneTimer = setTimeout(() => {
+        doneTimer = 0;
+        renderStatus("", false);
+      }, 1500);
+      return;
+    }
+
+    if (!doneTimer) renderStatus("", false);
   };
 
   const flushClassifications = () => {
+    if (!LLM_FILTER_ENABLED) return;
     const batch = Array.from(classifyQueue.values()).slice(0, 20);
     if (!batch.length) return;
 
-    for (const item of batch) classifyQueue.delete(item.id);
+    for (const item of batch) {
+      classifyQueue.delete(item.id);
+      inflight.add(item.id);
+    }
+
+    const slowTimer = setTimeout(() => {
+      slowReview = true;
+      scheduleScan();
+    }, 20000);
+
+    let settled = false;
+    const finish = (response) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(slowTimer);
+      clearTimeout(responseTimer);
+      slowReview = false;
+      handleVerdicts(batch, response);
+    };
+    const responseTimer = setTimeout(() => {
+      finish({ ok: false, error: "Review timed out" });
+    }, 30000);
 
     try {
       chrome.runtime.sendMessage(
         { type: "classify-replies", replies: batch },
-        (response) => handleVerdicts(batch, response)
+        finish
       );
     } catch (error) {
-      for (const item of batch) inflight.delete(item.id);
       console.error("[x-count-masker] could not review replies", error);
-      showStatus(
-        "Replies are hidden because the extension was reloaded. Refresh this tab to review them."
-      );
+      finish({ ok: false, error: "Extension connection unavailable; refresh this tab" });
     }
   };
 
@@ -793,7 +966,7 @@
         chrome.runtime.lastError?.message || response?.error || "unknown error";
       console.error("[x-count-masker] could not review replies", reason);
       showStatus(
-        `Replies are hidden until they can be reviewed. Retrying in 15s. (${reason.slice(0, 160)})`
+        `Review unavailable · unreviewed replies stay visible. Retrying in 15s. (${reason.slice(0, 160)})`
       );
       retryAfter = Date.now() + 15000;
       for (const item of batch) classifyQueue.set(item.id, item);
@@ -802,6 +975,7 @@
         flushTimer = 0;
         flushClassifications();
       }, 15000);
+      scheduleScan();
       return;
     }
 
@@ -810,15 +984,25 @@
 
     for (const verdict of response.verdicts || []) {
       const item = batch.find((candidate) => candidate.id === verdict.id);
-      if (!item || verdict.hash !== item.hash) continue;
-      verdicts.set(verdict.id, { hide: Boolean(verdict.hide), hash: item.hash });
+      if (!item || verdict.hash !== item.hash || typeof verdict.hide !== "boolean") continue;
+      verdicts.set(verdict.id, {
+        hide: verdict.hide,
+        hash: item.hash,
+        reason: verdict.reason || "model",
+        expiresAt: verdict.reason === "no-verdict" ? Date.now() + 60000 : 0
+      });
     }
 
     for (const item of batch) {
       const cached = verdicts.get(item.id);
       if (!cached || cached.hash !== item.hash) {
-        verdicts.set(item.id, { hide: true, hash: item.hash });
+        verdicts.set(item.id, { hide: false, hash: item.hash, reason: "no-verdict", expiresAt: Date.now() + 60000 });
       }
+    }
+
+    if (batch.some((item) => verdicts.get(item.id)?.reason === "no-verdict")) {
+      showStatus("Some replies could not be reviewed and remain visible. Retrying in 60s.");
+      setTimeout(scheduleScan, 60050);
     }
 
     if (classifyQueue.size) flushClassifications();
@@ -834,26 +1018,55 @@
     }, wait);
   };
 
+  let lastPath = "";
+
+  const resetOnNavigation = () => {
+    if (location.pathname === lastPath) return;
+    lastPath = location.pathname;
+
+    for (const [id, entry] of verdicts) {
+      if (entry.reason === "no-verdict") verdicts.delete(id);
+    }
+    firstSeen.clear();
+    slowReview = false;
+    wasReviewing = false;
+  };
+
   const moderateOwnPostComments = () => {
+    resetOnNavigation();
     const comments = collectOwnPostComments();
+    if (filteringActive) expandCollapsedReplies();
     const activeTargets = new Set(comments.map((comment) => comment.target));
 
     for (const cell of document.querySelectorAll(`.${HIDDEN_REPLY_CLASS}`)) {
-      if (!activeTargets.has(cell)) cell.classList.remove(HIDDEN_REPLY_CLASS);
+      if (activeTargets.has(cell)) continue;
+      cell.classList.remove(HIDDEN_REPLY_CLASS);
+      delete cell.dataset.xPlaygroundReason;
     }
 
     if (!cacheReady) {
       for (const comment of comments) {
-        comment.target.classList.add(HIDDEN_REPLY_CLASS);
+        comment.target.classList.remove(HIDDEN_REPLY_CLASS);
       }
+      updateReviewStatus(comments.length, comments.length);
       return;
     }
 
-    for (const comment of comments) applyVerdict(comment);
+    let pendingCount = 0;
+    for (const comment of comments) {
+      if (applyVerdict(comment)) pendingCount++;
+    }
     queueClassifications();
+    const hiddenCount = comments.filter((comment) =>
+      comment.target.classList.contains(HIDDEN_REPLY_CLASS)
+    ).length;
+    updateReviewStatus(pendingCount, comments.length, hiddenCount);
   };
 
-  chrome.storage.local.get(VERDICT_STORAGE_KEY, (data) => {
+  document.documentElement.dataset.xPlaygroundVersion =
+    chrome.runtime.getManifest().version;
+
+  if (LLM_FILTER_ENABLED) chrome.storage.local.get(VERDICT_STORAGE_KEY, (data) => {
     for (const [id, entry] of Object.entries(data?.[VERDICT_STORAGE_KEY] || {})) {
       if (entry && typeof entry.hide === "boolean" && entry.hash) {
         verdicts.set(id, { hide: entry.hide, hash: entry.hash });
@@ -879,9 +1092,11 @@
     }
 
     const scanRoot = root.body || root;
-    wrapMetricCountText(scanRoot, MASKED_METRIC_TEXT_PATTERN);
-    maskLabelledMetricCounts(scanRoot);
-    maskViewMetricCounts(scanRoot);
+    for (const article of postArticles(scanRoot)) {
+      wrapMetricCountText(article, MASKED_METRIC_TEXT_PATTERN);
+      maskLabelledMetricCounts(article);
+      maskViewMetricCounts(article);
+    }
     lockOwnPosts(scanRoot);
     moderateOwnPostComments();
 
@@ -905,10 +1120,27 @@
   };
 
   scan();
+  document.addEventListener("DOMContentLoaded", scheduleScan, { once: true });
+
+  // X renders its count tooltip in a separate popup, not a title attribute.
+  // Stop the events that open it before they reach X's delegated handlers.
+  for (const eventName of [
+    "mouseover", "mouseenter", "pointerover", "pointerenter", "focus", "focusin"
+  ]) {
+    document.addEventListener(
+      eventName,
+      (event) => {
+        if (!isOwnFollowerLink(event.target.closest?.(FOLLOWER_LINK_SELECTOR))) return;
+        event.stopImmediatePropagation();
+      },
+      true
+    );
+  }
 
   document.addEventListener(
     "click",
     (event) => {
+      if (!isOwnFollowerLink(event.target.closest?.(FOLLOWER_LINK_SELECTOR))) return;
       if (!event.target.closest(".x-count-masker-follower-count")) return;
 
       event.preventDefault();
@@ -952,7 +1184,9 @@
       const active = document.activeElement;
       if (!active || active.isContentEditable) return;
       if (active.matches("input, textarea, select")) return;
-      if (!active.closest(`.${OWN_POST_CLASS}`)) return;
+      const ownPost = active.closest(`.${OWN_POST_CLASS}`) ||
+        (active.matches('[role="link"]') && active.querySelector(`article.${OWN_POST_CLASS}`));
+      if (!ownPost) return;
 
       event.preventDefault();
       event.stopImmediatePropagation();
@@ -962,31 +1196,12 @@
 
   window.addEventListener("popstate", blockNotificationsPage);
 
-  document.addEventListener(
-    "dblclick",
-    (event) => {
-      const countNode = event.target.closest(".x-count-masker-follower-count");
-      if (!countNode) return;
-
-      countNode.classList.toggle("x-count-masker-follower-count--revealed");
-      countNode.title = countNode.classList.contains(
-        "x-count-masker-follower-count--revealed"
-      )
-        ? "Double-click to hide follower count"
-        : "Double-click to show follower count";
-
-      event.preventDefault();
-      event.stopPropagation();
-    },
-    true
-  );
-
   const observer = new MutationObserver(scheduleScan);
   observer.observe(document.documentElement, {
     childList: true,
     subtree: true,
     characterData: true,
     attributes: true,
-    attributeFilter: ["href", "aria-label"]
+    attributeFilter: ["href", "aria-label", "title", "data-testid", "aria-pressed"]
   });
 })();
